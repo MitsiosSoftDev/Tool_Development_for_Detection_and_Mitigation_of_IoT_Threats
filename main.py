@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives import padding
 import os
 
 
-class Server:
+class Client:
     def __init__(self, freq_range):
         self.freq_range = freq_range
         self.original_freq_range = freq_range
@@ -31,26 +31,24 @@ class Server:
         self.freq_model = RandomForestRegressor()  # Initialize Random Forest model for frequency prediction
         self.features = []
 
-    def start(self):
+    def connect(self):
         self.start_switch_back_timer()
         try:
-            self.current_frequency = random.randint(*self.freq_range)
-            print(f"Initial frequency: {self.current_frequency}")
-            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.server_socket.bind(('localhost', 8081))
-            self.server_socket.listen(1)
-            print("Server waiting for client to connect...")
-            self.client_socket, _ = self.server_socket.accept()
+            self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.client_socket.connect(('localhost', 8081))
             self.connected = True
+            self.current_frequency = int(self.client_socket.recv(1024).decode())
             self.synchronize_time()  # Synchronize initially
-            print(f"Server connected at frequency {self.current_frequency}")
-            self.client_socket.send(str(self.current_frequency).encode())
-            confirmation_msg = self.client_socket.recv(1024).decode()
-            print(f"Client confirmation: {confirmation_msg}")
+            print(f"Client connected at frequency {self.current_frequency}")
+            self.client_socket.send(b"Connection confirmation")
             threading.Thread(target=self.frequency_hopping, daemon=True).start()
-        except Exception as e:
-            print(f"Error in server start: {e}")
+        except ConnectionRefusedError:
+            print("Connection refused. Make sure the server is running.")
             self.connection_lost = True
+        except Exception as e:
+            print(f"Error: {e}")
+            self.connection_lost = True
+
     def start_switch_back_timer(self):
         self.switch_back_timer = threading.Timer(60, self.switch_back_to_original_range)
         self.switch_back_timer.start()
@@ -62,29 +60,24 @@ class Server:
 
     def disconnect(self):
         self.connected = False
-        print("Server disconnected")
+        print("Client disconnected")
         self.connection_lost = True
 
-    # Inside Server class frequency_hopping method
     def frequency_hopping(self):
         while self.connected:
             try:
-                new_frequency = random.randint(*self.freq_range)
+                encrypted_freq = self.client_socket.recv(1024)
+                decrypted_freq = self.decrypt(encrypted_freq)
+                new_frequency = int(decrypted_freq)
                 with self.lock:
-                    print(f"Server hopping to frequency {new_frequency}")
+                    print(f"Client hopping to frequency {new_frequency}")
                     self.current_frequency = new_frequency
-                    encrypted_freq = self.encrypt(str(new_frequency).encode())
+                    self.client_socket.send(b"ACK")  # Send acknowledgment to server
                     self.hop_counter += 1
-                    self.client_socket.send(encrypted_freq)
                     self.features.append([new_frequency])
-                # Wait for acknowledgment from client
-                ack = self.client_socket.recv(1024)
                 if len(self.features) >= 10:  # Update anomaly model after collecting 10 samples
                     self.update_anomaly_model()
-                if ack != b"ACK":
-                    print("Failed to receive acknowledgment from client.")
-                    self.connection_lost = True
-                    break
+
                 if self.hop_counter == self.attack_hop_threshold:
                     self.simulate_attack()
                 time.sleep(1)
@@ -112,6 +105,7 @@ class Server:
             self.features = []  # Reset features for the next round of sampling
         except Exception as e:
             print(f"Error updating anomaly model: {e}")
+
     def simulate_attack(self):
         if self.switch_back_timer:
             self.switch_back_timer.cancel()
@@ -125,7 +119,7 @@ class Server:
         try:
             ntp_client = ntplib.NTPClient()
             response = ntp_client.request('1.europe.pool.ntp.org')
-            print(f"NTP Server: {response.tx_time}")
+            print(f"NTP Client: {response.tx_time}")
             print(f"NTP Offset: {response.offset}")
             print(f"Time before adjustment: {time.time()}")
             current_time = time.time()
@@ -143,6 +137,16 @@ class Server:
         padder = padding.PKCS7(128).padder()
         padded_data = padder.update(data) + padder.finalize()
         return iv + encryptor.update(padded_data) + encryptor.finalize()
+
+    def decrypt(self, data):
+        iv = data[:16]
+        key = self.derive_key()
+        cipher = Cipher(algorithms.AES(key), modes.CFB(iv), backend=default_backend())
+        decryptor = cipher.decryptor()
+        decrypted_data = decryptor.update(data[16:]) + decryptor.finalize()
+        unpadder = padding.PKCS7(128).unpadder()
+        unpadded_data = unpadder.update(decrypted_data) + unpadder.finalize()
+        return unpadded_data.decode('utf-8')
 
     def derive_key(self):
         kdf = PBKDF2HMAC(
@@ -164,35 +168,39 @@ class Server:
                 if not self.attack_detected:
                     # Simulate attack detection
                     if random.random() < 0.50:  # 5% chance of detecting an attack
-                        print("Server detected an attack!")
+                        print("Client detected an attack!")
                         self.attack_detected = True
                         # Switch to safe frequency range
                         self.switch_to_safe_range()
 
     def switch_to_safe_range(self):
         self.freq_range = (5000, 8000)
-        print("Server and client switched to safe frequency range.")
+        print("Client and server switched to safe frequency range.")
 
     def frequency_hopping_safe_range(self):
         while self.connected and self.attack_detected:
-            new_frequency = random.randint(*self.freq_range)
-            with self.lock:
-                print(f"Server hopping to frequency {new_frequency} within safe range")
-                self.current_frequency = new_frequency
-                self.client_socket.send(str(new_frequency).encode())
-            time.sleep(1)
+            try:
+                new_frequency = int(self.client_socket.recv(1024).decode())
+                with self.lock:
+                    print(f"Client hopping to frequency {new_frequency} within safe range")
+                    self.current_frequency = new_frequency
+                    self.client_socket.send(str(new_frequency).encode())
+                time.sleep(1)
+            except Exception as e:
+                print(f"Error: {e}")
+                self.connection_lost = True
 
 
 # Define frequency range
 frequency_range = (500, 1000)
 
-# Create and start the server
-server = Server(frequency_range)
-server.start()
+# Create and start the client
+client = Client(frequency_range)
+client.connect()
 
 # Monitor connection
 while True:
     time.sleep(1)
-    if server.connection_lost:
+    if client.connection_lost:
         print("Connection lost.")
         break
