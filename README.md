@@ -1,6 +1,6 @@
-# **Thesis Project - Development Of A Tool For Detection And Mitigation Of IoT Threats**
+# **Thesis Project - Development of a Tool for Detection and Mitigation of IoT Threats**
 
-## This tool was developed by me and was the Thesis Project for my BSc Degree in Computer Science. The project was developed in Python using JetBrains - PyCharm Professional. The project is based on a Server - Client Architecture and the communication between the two programs is achieved using sockets.
+## This tool was developed by me as the Thesis Project for my BSc Degree in Computer Science. The project was implemented in Python using JetBrains PyCharm Professional. It is based on a Server - Client Architecture, with communication between the two programs achieved through sockets.
 
 
 
